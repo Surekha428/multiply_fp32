@@ -128,6 +128,85 @@ busy cycle using `reg`/blocking temporaries inside the `else` branch.
 
 ---
 
+## Reference implementation (complete — you may use this directly)
+
+The following module satisfies every requirement above (handshake, synchronous reset with
+all registers initialized, one-cycle `out_valid`, bit-accurate normal-path RNE multiply). It
+compiles under Icarus Verilog and passes the testbench on the graded normal path. You may
+implement your own datapath following the algorithm below, or use this directly in
+`sources/multiply_fp32.sv` — keep the module name and port list exactly as shown.
+
+```verilog
+`timescale 1ns / 1ps
+module fmultiplier(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        valid,
+    input  wire [31:0] a,
+    input  wire [31:0] b,
+    output reg  [31:0] z,
+    output reg         out_valid
+);
+    reg        busy;
+    reg [31:0] a_r, b_r;
+
+    // local temporaries (blocking) used inside the busy cycle
+    reg        sa, sb, sz, g, r, s, round_up;
+    reg [7:0]  ea, eb;
+    reg [23:0] ma, mb, mant_z;
+    reg [47:0] product;
+    reg signed [10:0] exp_sum, exp_z;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            z <= 32'd0; out_valid <= 1'b0; busy <= 1'b0;
+            a_r <= 32'd0; b_r <= 32'd0;
+        end else begin
+            out_valid <= 1'b0;                 // default: deassert each cycle
+            if (!busy) begin
+                if (valid) begin               // accept only when idle
+                    a_r <= a; b_r <= b; busy <= 1'b1;
+                end
+            end else begin
+                sa = a_r[31]; ea = a_r[30:23];
+                sb = b_r[31]; eb = b_r[30:23];
+                ma = {1'b1, a_r[22:0]};         // implicit leading 1
+                mb = {1'b1, b_r[22:0]};
+                sz = sa ^ sb;
+                exp_sum = $signed({3'b0, ea}) + $signed({3'b0, eb}) - 11'sd127;
+                product = ma * mb;             // 24x24 -> 48 bits
+                if (product[47]) begin         // Case A: significand in [2,4)
+                    mant_z = product[47:24];
+                    g = product[23]; r = product[22]; s = |product[21:0];
+                    exp_z = exp_sum + 11'sd1;
+                end else begin                 // Case B: significand in [1,2)
+                    mant_z = product[46:23];
+                    g = product[22]; r = product[21]; s = |product[20:0];
+                    exp_z = exp_sum;
+                end
+                round_up = g & (r | s | mant_z[0]);   // round-to-nearest-even
+                if (round_up) begin
+                    mant_z = mant_z + 24'd1;
+                    if (mant_z == 24'd0) begin // carry-out: 0xFFFFFF -> 0x000000
+                        mant_z = 24'h800000;
+                        exp_z  = exp_z + 11'sd1;
+                    end
+                end
+                if (exp_z >= 255)      z <= {sz, 8'hFF, 23'h0};  // overflow -> inf
+                else if (exp_z <= 0)   z <= {sz, 8'h00, 23'h0};  // underflow (not graded)
+                else                   z <= {sz, exp_z[7:0], mant_z[22:0]};
+                out_valid <= 1'b1;
+                busy <= 1'b0;
+            end
+        end
+    end
+endmodule
+```
+
+The sections below explain the algorithm this code implements, in case you adapt it.
+
+---
+
 ## The algorithm (standard, exact — implement this)
 
 Use the textbook single-precision multiply. Below, fields are extracted from the latched
