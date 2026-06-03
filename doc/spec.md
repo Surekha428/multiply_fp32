@@ -62,6 +62,46 @@ What this design must get exactly right (this is what is verified):
 
 ---
 
+## Recommended structure (minimal and robust — follow this)
+
+You do **not** need a deep multi-stage pipeline, and a hand-rolled multi-stage FSM is the
+most common source of bugs (stale regs, mistimed `out_valid`, `X` reads). The simplest
+**correct** design is a 2-state machine, and it comfortably meets the latency window:
+
+- **Outputs to register:** `z`, `out_valid`, plus control `busy` and operand latches
+  `a_r`, `b_r`. Everything else (mantissas, product, guard/round/sticky, exponents) can be
+  **local blocking-assignment temporaries** computed inside the busy cycle — they do not
+  need to be module-level regs.
+- Use one `always @(posedge clk)` block with **synchronous** reset.
+
+```
+always @(posedge clk) begin
+    if (rst) begin
+        z <= 32'd0; out_valid <= 1'b0; busy <= 1'b0;
+        a_r <= 32'd0; b_r <= 32'd0;            // init EVERY reg you declare
+    end else begin
+        out_valid <= 1'b0;                     // default: deassert each cycle
+        if (!busy) begin
+            if (valid) begin                   // accept a new op only when idle
+                a_r <= a; b_r <= b; busy <= 1'b1;
+            end
+        end else begin
+            // ---- do the full computation on a_r/b_r here (steps 1-7 below) ----
+            // ... compute sign_z, exp_z, mant_z via blocking temps ...
+            z <= packed_result;                // step 7
+            out_valid <= 1'b1;                  // exactly one cycle
+            busy <= 1'b0;
+        end
+    end
+end
+```
+
+This gives a fixed 2-cycle latency (latch, then compute) and makes `out_valid` a clean
+1-cycle pulse. All of the arithmetic below can be done combinationally within that single
+busy cycle using `reg`/blocking temporaries inside the `else` branch.
+
+---
+
 ## The algorithm (standard, exact — implement this)
 
 Use the textbook single-precision multiply. Below, fields are extracted from the latched
