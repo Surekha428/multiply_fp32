@@ -102,6 +102,32 @@ busy cycle using `reg`/blocking temporaries inside the `else` branch.
 
 ---
 
+## Common pitfalls (these cause most failures — check every one)
+
+- **Initialize EVERY declared reg in the `rst` branch** (`z`, `out_valid`, `busy`, `a_r`,
+  `b_r`, and anything else you declare at module scope). An uninitialized reg reads as `X`;
+  the testbench does `int(dut.z.value)` / `int(dut.out_valid.value)` and **errors instantly
+  on `X`** — this is the single most common cause of a 0-score run.
+- **Reset is synchronous & active-high.** Use `always @(posedge clk)` with `if (rst) …
+  else …`. Do **not** put `rst` in the sensitivity list (`@(posedge clk or posedge rst)`).
+- **`out_valid` must be high for exactly ONE cycle.** Default it to `0` every cycle and set
+  it to `1` only on the cycle you produce `z`; clear `busy` the same cycle.
+- **Accept `valid` only when `!busy`**, and ignore `valid` while busy.
+- **`product` must be at least 48 bits** (`24×24`). A 32-bit reg silently truncates and
+  every result is wrong.
+- **Use the two normalize cases keyed on `product[47]` exactly as written** below. Do not
+  mix in a `*4` / 50-bit / `[49:26]` scheme — the bit indices won't line up.
+- **RNE must include the tie-to-even term:** `round_up = guard & (round | sticky |
+  mant_z[0])`, and handle the carry-out (mantissa overflow → `0x800000`, `exp_z + 1`).
+- **Treat exponents as signed** (e.g. `reg signed [10:0] exp_sum, exp_z;`). `exp_sum` can go
+  negative before biasing; use `$signed(...)` in comparisons.
+- **Drop the implicit leading 1 when packing:** the fraction field is `mant_z[22:0]`, not
+  `mant_z[23:0]`.
+- **No SVA** — `assert property` / `sequence` / `property` are rejected by Icarus Verilog.
+  Plain procedural code only; keep it synthesizable.
+
+---
+
 ## The algorithm (standard, exact — implement this)
 
 Use the textbook single-precision multiply. Below, fields are extracted from the latched
