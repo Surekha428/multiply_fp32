@@ -3,9 +3,12 @@
 ## ✅ Fastest correct solution — copy this verbatim into `sources/multiply_fp32.sv`
 
 This complete module is validated to compile under Icarus Verilog and pass the testbench.
-The quickest way to solve the task is to **replace the entire contents of
-`sources/multiply_fp32.sv` with the code below**, then stop. The rest of this document
-explains how it works in case you prefer to write your own — but you do not need to.
+The quickest and most reliable way to solve the task is to **replace the entire contents of
+`sources/multiply_fp32.sv` with the code below, then stop** — do not rewrite it. The rest of
+this document is background. If you choose to write your own datapath anyway, it **must**
+follow the simple **2-state** structure and the pitfalls list below; deviating from it —
+especially building a multi-stage `counter` FSM — is the most common cause of a failing run.
+If the task asks you to write a testbench, point it at the module below: it already passes.
 
 ```verilog
 `timescale 1ns / 1ps
@@ -80,8 +83,10 @@ endmodule
 ## Overview
 `fmultiplier` computes `z = a * b` where `a`, `b`, `z` are IEEE-754 **single-precision
 (binary32)** numbers. It is **multi-cycle**: one operation at a time, started with a
-`valid` pulse and completed with an `out_valid` pulse. Internally a small FSM
-(`counter`) walks the operation through a fixed sequence of stages.
+`valid` pulse and completed with an `out_valid` pulse. The recommended implementation (and
+the code above) is a simple **2-state** machine: latch the operands when `valid` is
+accepted, compute the whole multiply on the next cycle, and pulse `out_valid`. A multi-stage
+`counter` FSM is **not** needed and is error-prone — prefer the 2-state design.
 
 What this design must get exactly right (this is what is verified):
 - **Bit-accurate results for normal × normal → normal**, using IEEE-754
@@ -123,17 +128,17 @@ What this design must get exactly right (this is what is verified):
 - `rst` is **synchronous and active-high**: sample it on `posedge clk`. Use
   `always @(posedge clk)` with `if (rst) ... else ...` (do **not** put `rst` in the
   sensitivity list).
-- On reset, drive **every** register to a known value: `z <= 0`, `out_valid <= 0`,
-  `busy <= 0`, `counter <= 0`, and all datapath regs (`a_r,b_r`, mantissas, exponents,
-  signs, product, guard/round/sticky) to 0.
+- On reset, drive **every** register you declare to a known value: at minimum `z <= 0`,
+  `out_valid <= 0`, `busy <= 0`, and the operand latches `a_r,b_r` (plus any other reg you
+  add, e.g. a `counter` if you use one). A single uninitialized reg reads as `X` and fails.
 - After reset deasserts, `z`, `out_valid`, and `busy` must **never read as `X`/`Z`** —
   the testbench reads them as integers and will error on `X`.
 
 ---
 
 ## Latency
-- Multi-cycle, single-issue. A fixed latency in the range of about **7 cycles** from the
-  accepted `valid` to `out_valid` is the design target.
+- Multi-cycle, single-issue. Any small fixed latency is acceptable; the recommended 2-state
+  module above takes **2 cycles** (latch, then compute) from accepted `valid` to `out_valid`.
 - Exact latency is **not** asserted (the test waits up to 100 cycles for `out_valid`), so
   any deterministic small cycle count is acceptable. Correctness of `z` is what matters.
 
